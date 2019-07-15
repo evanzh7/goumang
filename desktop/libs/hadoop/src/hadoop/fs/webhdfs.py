@@ -19,18 +19,24 @@
 Interfaces for Hadoop filesystem access via HttpFs/WebHDFS
 """
 
+from future import standard_library
+standard_library.install_aliases()
+from builtins import str
+from builtins import oct
+from builtins import object
 import errno
 import logging
 import posixpath
 import stat
 import threading
 import time
-import urllib
+import urllib.request, urllib.parse, urllib.error
 
-from urlparse import urlparse
+from urllib.parse import urlparse
 from django.utils.encoding import smart_str
 from django.utils.translation import ugettext as _
 from desktop.lib.rest import http_client, resource
+from past.builtins import long
 from hadoop.fs import normpath as fs_normpath, SEEK_SET, SEEK_CUR, SEEK_END
 from hadoop.fs.hadoopfs import Hdfs
 from hadoop.fs.exceptions import WebHdfsException
@@ -63,7 +69,7 @@ class WebHdfs(Hdfs):
                security_enabled=False,
                ssl_cert_ca_verify=True,
                temp_dir="/tmp",
-               umask=01022,
+               umask=0o1022,
                hdfs_supergroup=None):
     self._url = url
     self._superuser = hdfs_superuser
@@ -157,7 +163,7 @@ class WebHdfs(Hdfs):
           # The owner of '/' is usually the superuser
           sb = self.stats('/')
           self._superuser = sb.user
-        except Exception, ex:
+        except Exception as ex:
           LOG.exception('Failed to determine superuser of %s: %s' % (self, ex))
           self._superuser = DEFAULT_HDFS_SUPERUSER
 
@@ -182,7 +188,7 @@ class WebHdfs(Hdfs):
 
       json = self._root.get(path, params, headers)
       trash_path = json['Path']
-    except WebHdfsException, e:
+    except WebHdfsException as e:
       exceptions = ['IllegalArgumentException', 'UnsupportedOperationException']
       if any(x in e.message for x in exceptions):
         LOG.warn('WebHDFS operation GETTRASHROOT is not implemented, returning default trash path: %s' % trash_path)
@@ -213,7 +219,7 @@ class WebHdfs(Hdfs):
     return path.startswith(self._scheme) if self._scheme else path == '/'
 
   def strip_normpath(self, path):
-    split = urlparse(path)
+    split = urlparse(smart_str(path))
     path = split._replace(scheme="", netloc="").geturl()
     return Hdfs.normpath(path)
 
@@ -284,7 +290,7 @@ class WebHdfs(Hdfs):
     try:
       json = self._root.get(path, params, headers)
       return WebHdfsStat(json['FileStatus'], path)
-    except WebHdfsException, ex:
+    except WebHdfsException as ex:
       if ex.server_exc == 'FileNotFoundException' or ex.code == 404:
         return None
       raise ex
@@ -519,7 +525,7 @@ class WebHdfs(Hdfs):
     params['op'] = 'GETHOMEDIRECTORY'
     headers = self._getheaders()
     res = self._root.get(params=params, headers=headers)
-    for key, value in res.iteritems():
+    for key, value in res.items():
       if key.lower() == "path":
         return self.normpath(value)
 
@@ -550,7 +556,7 @@ class WebHdfs(Hdfs):
           del params['doas']
         if 'user.name' in params:
           del params['user.name']
-    quoted_path = urllib.quote(smart_str(path))
+    quoted_path = urllib.parse.quote(smart_str(path))
     return self._client._make_url(quoted_path, params)
 
   def read(self, path, offset, length, bufsize=None):
@@ -569,7 +575,7 @@ class WebHdfs(Hdfs):
     headers = self._getheaders()
     try:
       return self._root.get(path, params, headers)
-    except WebHdfsException, ex:
+    except WebHdfsException as ex:
       if "out of the range" in ex.message:
         return ""
       raise ex
@@ -587,11 +593,11 @@ class WebHdfs(Hdfs):
 
 
   def getDefaultFilePerms(self):
-    return 0666 & (01777 ^ self._umask)
+    return 0o666 & (0o1777 ^ self._umask)
 
 
   def getDefaultDirPerms(self):
-    return 01777 & (01777 ^ self._umask)
+    return 0o1777 & (0o1777 ^ self._umask)
 
 
   def create(self, path, overwrite=False, blocksize=None, replication=None, permission=None, data=None):
@@ -689,7 +695,7 @@ class WebHdfs(Hdfs):
     headers = self._getheaders()
     try:
       return self._root.get(path, params, headers)
-    except WebHdfsException, ex:
+    except WebHdfsException as ex:
       if ex.code == 500 or ex.code == 400:
         LOG.warn('Failed to check access to path %s, CHECKACCESS operation may not be supported.' % path)
         return None
@@ -839,7 +845,7 @@ class WebHdfs(Hdfs):
     try:
       # Do not pass data in the first leg.
       self._root.invoke(method, path, params, headers=headers)
-    except WebHdfsException, ex:
+    except WebHdfsException as ex:
       # This is expected. We get a 307 redirect.
       # The following call may throw.
       next_url = self._get_redirect_url(ex)
@@ -870,7 +876,7 @@ class WebHdfs(Hdfs):
         LOG.error("Response is not a redirect: %s" % webhdfs_ex)
         raise webhdfs_ex
       return http_error.response.headers['location']
-    except Exception, ex:
+    except Exception as ex:
       LOG.exception("Failed to read redirect from response: %s (%s)" % (webhdfs_ex, ex))
       raise webhdfs_ex
 
@@ -945,7 +951,7 @@ class File(object):
       self._stat = fs.stats(path)
       if self._stat.isDir:
         raise IOError(errno.EISDIR, _("Is a directory: '%s'") % path)
-    except IOError, ex:
+    except IOError as ex:
       if ex.errno == errno.ENOENT and 'w' in self._mode:
         self._fs.create(self._path)
         self.stat()
@@ -999,7 +1005,7 @@ def safe_octal(octal_value):
   This correctly handles octal values specified as a string or as a numeric.
   """
   try:
-    return oct(octal_value)
+    return oct(octal_value).replace('o', '') # fix futurized octal value with 0o prefix
   except TypeError:
     return str(octal_value)
 
@@ -1028,7 +1034,7 @@ def test_fs_configuration(fs_config):
     statbuf = fs.stats('/')
     if statbuf.user != DEFAULT_HDFS_SUPERUSER:
       return [(fs_config.WEBHDFS_URL, _("Filesystem root '/' should be owned by '%s'") % DEFAULT_HDFS_SUPERUSER)]
-  except Exception, ex:
+  except Exception as ex:
     LOG.info("%s -- Validation error: %s" % (fs, ex))
     return [(fs_config.WEBHDFS_URL, _('Failed to access filesystem root'))]
 
@@ -1036,7 +1042,7 @@ def test_fs_configuration(fs_config):
   tmpname = fs.mktemp(prefix='hue_config_validation')
   try:
     fs.create(tmpname)
-  except Exception, ex:
+  except Exception as ex:
     LOG.info("%s -- Validation error: %s" % (fs, ex))
     return [(fs_config.WEBHDFS_URL, _('Failed to create temporary file "%s"') % tmpname)]
 
@@ -1044,7 +1050,7 @@ def test_fs_configuration(fs_config):
   try:
     try:
       fs.chown(tmpname, fs.superuser)
-    except Exception, ex:
+    except Exception as ex:
       LOG.info("%s -- Validation error: %s" % (fs, ex))
       return [(fs_config.WEBHDFS_URL,
               'Failed to chown file. Please make sure that the filesystem root '
@@ -1052,7 +1058,7 @@ def test_fs_configuration(fs_config):
   finally:
     try:
       fs.remove(tmpname, skip_trash=True)
-    except Exception, ex:
+    except Exception as ex:
       LOG.error("Failed to remove '%s': %s" % (tmpname, ex))
       return [(fs_config.WEBHDFS_URL, _('Failed to remove temporary file "%s"') % tmpname)]
 
