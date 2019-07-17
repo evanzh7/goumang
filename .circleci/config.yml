@@ -68,6 +68,7 @@ jobs:
             # make npm-install # Not available
             cp ~/repo/.babelrc .
             cp ~/repo/webpack.config*.js .
+            cp ~/repo/package.json .
             npm install
             npm run webpack
             npm run webpack-login
